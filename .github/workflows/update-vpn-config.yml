@@ -4,7 +4,6 @@ on:
   push:
     branches: [main]
   schedule:
-    # GitHub Actions 定时任务最短 5 分钟，不支持每分钟
     - cron: '*/5 * * * *'
   workflow_dispatch:
 
