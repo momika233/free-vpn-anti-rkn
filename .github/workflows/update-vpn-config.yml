@@ -4,34 +4,86 @@ on:
   push:
     branches: [main]
   schedule:
-    # Максимальная частота в GitHub Actions — раз в минуту (30 сек cron не поддерживает)
-    - cron: '* * * * *'
+    # GitHub Actions 定时任务最短 5 分钟，不支持每分钟
+    - cron: '*/5 * * * *'
   workflow_dispatch:
+
+permissions:
+  contents: write
+
+concurrency:
+  group: update-vpn-configs
+  cancel-in-progress: false
 
 jobs:
   update:
     runs-on: ubuntu-latest
-    permissions:
-      contents: write
+    timeout-minutes: 20
 
     steps:
       - name: Checkout
         uses: actions/checkout@v4
 
-      - name: Fetch and reduce all 26 lists (1/4 configs each, max 300)
+      - name: Fetch AvenCores 1-26 (short + full)
         run: |
+          set -e
           mkdir -p configs
           BASE="https://raw.githubusercontent.com/AvenCores/goida-vpn-configs/refs/heads/main/githubmirror"
           MAX=300
-          printf 'OpenRay\n5ubscrpt10n\nproxy-minging\nAutoVPN\nV2RayCFGDumper\nopenproxylist\nv2ray-configs\ncid-vpn-config\ntelegram-v2ray-configs\n.proxy\nV2rayCollector\n.proxy\nconfig\nMineral\nConfig-Collector\nFree-servers\nV2rayCollector_Py\nv2ray\nV2rayCollector\nProxy-List\nkamaji\nxray-config-toolkit\nXray\nSTRUGOV\nV2RayConfig\nОбход SNI/CIDR\n' > names_aven.txt
+
+          cat > names_aven.txt <<'EOF'
+          OpenRay
+          5ubscrpt10n
+          proxy-minging
+          AutoVPN
+          V2RayCFGDumper
+          openproxylist
+          v2ray-configs
+          cid-vpn-config
+          telegram-v2ray-configs
+          .proxy
+          V2rayCollector
+          .proxy
+          config
+          Mineral
+          Config-Collector
+          Free-servers
+          V2rayCollector_Py
+          v2ray
+          V2rayCollector
+          Proxy-List
+          kamaji
+          xray-config-toolkit
+          Xray
+          STRUGOV
+          V2RayConfig
+          Обход SNI/CIDR
+          EOF
+
           for i in $(seq 1 26); do
-            curl -sLf "${BASE}/${i}.txt" -o full.txt || true
+            curl -sLf --retry 3 --retry-delay 2 "${BASE}/${i}.txt" -o full.txt || true
             touch full.txt
             grep -E '^(vless|trojan|vmess|ss|hy2)://' full.txt > filtered.txt || true
-            if [ "$i" -eq 26 ]; then grep -v '\.ru' filtered.txt > filtered2.txt && mv filtered2.txt filtered.txt; fi
-            N=$(wc -l < filtered.txt)
+
+            if [ "$i" -eq 26 ]; then
+              grep -v '\.ru' filtered.txt > filtered2.txt || true
+              mv filtered2.txt filtered.txt
+            fi
+
+            name=$(sed -n "${i}p" names_aven.txt)
+
+            # 完整版：i.2.txt
+            f2="${i}.2.txt"
+            {
+              echo "# Подписка $f2 | $name (полный)"
+              cat filtered.txt
+            } > "configs/$f2"
+            echo "  configs/$f2: $(wc -l < filtered.txt | tr -d ' ') servers"
+
+            # 精简版：i.1.txt，最多 MAX 条
+            N=$(wc -l < filtered.txt | tr -d ' ')
             if [ "$N" -eq 0 ]; then
-              cp filtered.txt new.txt
+              : > new.txt
             elif [ "$N" -lt "$MAX" ]; then
               cp filtered.txt new.txt
             else
@@ -42,35 +94,64 @@ jobs:
                 awk -v T="$N" -v target="$MAX" 'int((NR-1)*target/T) != int((NR-2)*target/T)' filtered.txt > new.txt
               fi
             fi
+
             if [ ! -s new.txt ] && [ -s filtered.txt ]; then
               cp filtered.txt new.txt
             fi
+
+            f1="${i}.1.txt"
             if [ -s new.txt ]; then
-              name=$(sed -n "${i}p" names_aven.txt)
-              f="${i}.1.txt"
-              echo "# Подписка $f | $name (короткий)" > "configs/$f"
-              cat new.txt >> "configs/$f"
-              echo "  configs/$f: $(wc -l < new.txt) servers"
+              {
+                echo "# Подписка $f1 | $name (короткий)"
+                cat new.txt
+              } > "configs/$f1"
+              echo "  configs/$f1: $(wc -l < new.txt | tr -d ' ') servers"
             else
-              echo "  configs/${i}.1.txt: no configs, skipped"
+              rm -f "configs/$f1"
+              echo "  configs/$f1: no configs, skipped"
             fi
           done
 
-      - name: Fetch igareck/vpn-configs-for-russia (27–34); 28/32/33 as N.1+N.2
+      - name: Fetch igareck 27-34
         run: |
+          set -e
           BASE="https://raw.githubusercontent.com/igareck/vpn-configs-for-russia/main"
           MAX=300
-          n=27
-          titles='Shadowsocks+All (чёрный)|VLESS все (чёрный)|VLESS 150 (чёрный)|CIDR белый mobile 1|CIDR белый mobile 2|CIDR белый все|CIDR VK/Ya/CDN/Beeline|SNI белый список'
-          for name in "BLACK_SS%2BAll_RUS.txt" "BLACK_VLESS_RUS.txt" "BLACK_VLESS_RUS_mobile.txt" \
-                      "Vless-Reality-White-Lists-Rus-Mobile.txt" "Vless-Reality-White-Lists-Rus-Mobile-2.txt" \
-                      "WHITE-CIDR-RU-all.txt" "WHITE-CIDR-RU-checked.txt" "WHITE-SNI-RU-all.txt"; do
-            curl -sLf "${BASE}/${name}" -o full.txt || true
+
+          files=(
+            "BLACK_SS%2BAll_RUS.txt"
+            "BLACK_VLESS_RUS.txt"
+            "BLACK_VLESS_RUS_mobile.txt"
+            "Vless-Reality-White-Lists-Rus-Mobile.txt"
+            "Vless-Reality-White-Lists-Rus-Mobile-2.txt"
+            "WHITE-CIDR-RU-all.txt"
+            "WHITE-CIDR-RU-checked.txt"
+            "WHITE-SNI-RU-all.txt"
+          )
+
+          titles=(
+            "Shadowsocks+All (чёрный)"
+            "VLESS все (чёрный)"
+            "VLESS 150 (чёрный)"
+            "CIDR белый mobile 1"
+            "CIDR белый mobile 2"
+            "CIDR белый все"
+            "CIDR VK/Ya/CDN/Beeline"
+            "SNI белый список"
+          )
+
+          for idx in "${!files[@]}"; do
+            n=$((27 + idx))
+            name="${files[$idx]}"
+            title="${titles[$idx]}"
+
+            curl -sLf --retry 3 --retry-delay 2 "${BASE}/${name}" -o full.txt || true
             touch full.txt
             grep -E '^(vless|trojan|vmess|ss|hy2)://' full.txt > filtered.txt || true
-            N=$(wc -l < filtered.txt)
+
+            N=$(wc -l < filtered.txt | tr -d ' ')
             if [ "$N" -eq 0 ]; then
-              cp filtered.txt new.txt
+              : > new.txt
             elif [ "$N" -lt "$MAX" ]; then
               cp filtered.txt new.txt
             else
@@ -81,75 +162,79 @@ jobs:
                 awk -v T="$N" -v target="$MAX" 'int((NR-1)*target/T) != int((NR-2)*target/T)' filtered.txt > new.txt
               fi
             fi
-            if [ ! -s new.txt ] && [ -s filtered.txt ]; then cp filtered.txt new.txt; fi
-            title=$(echo "$titles" | cut -d'|' -f$((n-26)))
+
+            if [ ! -s new.txt ] && [ -s filtered.txt ]; then
+              cp filtered.txt new.txt
+            fi
+
             if [ "$n" -eq 28 ] || [ "$n" -eq 32 ] || [ "$n" -eq 33 ]; then
               if [ -s new.txt ]; then
-                echo "# Подписка ${n}.1 | $title (igareck, короткий)" > "configs/${n}.1.txt"
-                cat new.txt >> "configs/${n}.1.txt"
-                echo "  configs/${n}.1.txt: $(wc -l < new.txt) servers (from ${name})"
+                {
+                  echo "# Подписка ${n}.1 | $title (igareck, короткий)"
+                  cat new.txt
+                } > "configs/${n}.1.txt"
+                echo "  configs/${n}.1.txt: $(wc -l < new.txt | tr -d ' ') servers (from ${name})"
+              else
+                rm -f "configs/${n}.1.txt"
               fi
+
               if [ -s filtered.txt ]; then
-                echo "# Подписка ${n}.2 | $title (igareck, полный)" > "configs/${n}.2.txt"
-                cat filtered.txt >> "configs/${n}.2.txt"
-                echo "  configs/${n}.2.txt: $(wc -l < filtered.txt) servers (full)"
+                {
+                  echo "# Подписка ${n}.2 | $title (igareck, полный)"
+                  cat filtered.txt
+                } > "configs/${n}.2.txt"
+                echo "  configs/${n}.2.txt: $(wc -l < filtered.txt | tr -d ' ') servers (full)"
+              else
+                rm -f "configs/${n}.2.txt"
               fi
             else
               if [ -s new.txt ]; then
-                echo "# Подписка $n | $title (igareck)" > "configs/${n}.txt"
-                cat new.txt >> "configs/${n}.txt"
-                echo "  configs/${n}.txt: $(wc -l < new.txt) servers (from ${name})"
+                {
+                  echo "# Подписка $n | $title (igareck)"
+                  cat new.txt
+                } > "configs/${n}.txt"
+                echo "  configs/${n}.txt: $(wc -l < new.txt | tr -d ' ') servers (from ${name})"
               else
+                rm -f "configs/${n}.txt"
                 echo "  configs/${n}.txt: no configs, skipped (${name})"
               fi
             fi
-            n=$((n + 1))
           done
 
-      - name: Fetch full lists (1.2, 2.2, …, 26.2) from AvenCores — только для 1–26
+      - name: Generate counts.json and all.log
         run: |
-          BASE="https://raw.githubusercontent.com/AvenCores/goida-vpn-configs/refs/heads/main/githubmirror"
-          printf 'OpenRay\n5ubscrpt10n\nproxy-minging\nAutoVPN\nV2RayCFGDumper\nopenproxylist\nv2ray-configs\ncid-vpn-config\ntelegram-v2ray-configs\n.proxy\nV2rayCollector\n.proxy\nconfig\nMineral\nConfig-Collector\nFree-servers\nV2rayCollector_Py\nv2ray\nV2rayCollector\nProxy-List\nkamaji\nxray-config-toolkit\nXray\nSTRUGOV\nV2RayConfig\nОбход\n' > names_aven.txt
-          for i in $(seq 1 26); do
-            curl -sLf "${BASE}/${i}.txt" -o full.txt || true
-            touch full.txt
-            grep -E '^(vless|trojan|vmess|ss|hy2)://' full.txt > filtered.txt || true
-            if [ "$i" -eq 26 ]; then grep -v '\.ru' filtered.txt > filtered2.txt && mv filtered2.txt filtered.txt; fi
-            name=$(sed -n "${i}p" names_aven.txt)
-            f="${i}.2.txt"
-            echo "# Подписка $f | $name (полный)" > "configs/$f"
-            cat filtered.txt >> "configs/$f"
-            echo "  configs/$f: $(wc -l < filtered.txt) servers"
-          done
-
-      - name: Generate counts.json (per-config and total unique servers)
-        run: |
+          set -e
           echo '{' > configs/counts.json
-          for i in $(seq 1 26); do
-            for s in 1 2; do
-              key="${i}.${s}"
-              c=0
-              [ -f "configs/${key}.txt" ] && c=$(grep -cE '^(vless|trojan|vmess|ss|hy2)://' "configs/${key}.txt" 2>/dev/null || true)
-              echo "  \"$key\": ${c:-0}," >> configs/counts.json
-            done
+
+          for f in $(find configs -maxdepth 1 -name '*.txt' | sort -V); do
+            key=$(basename "$f" .txt)
+            c=$(grep -cE '^(vless|trojan|vmess|ss|hy2)://' "$f" 2>/dev/null || true)
+            printf '  "%s": %s,\n' "$key" "${c:-0}" >> configs/counts.json
           done
-          for i in 27 29 30 31 34; do
-            c=0
-            [ -f "configs/${i}.txt" ] && c=$(grep -cE '^(vless|trojan|vmess|ss|hy2)://' "configs/${i}.txt" 2>/dev/null || true)
-            echo "  \"$i\": ${c:-0}," >> configs/counts.json
-          done
-          for i in 28 32 33; do
-            for s in 1 2; do
-              key="${i}.${s}"
-              c=0
-              [ -f "configs/${key}.txt" ] && c=$(grep -cE '^(vless|trojan|vmess|ss|hy2)://' "configs/${key}.txt" 2>/dev/null || true)
-              echo "  \"$key\": ${c:-0}," >> configs/counts.json
-            done
-          done
-          total=$( ( for i in $(seq 1 26); do for s in 1 2; do [ -f "configs/${i}.${s}.txt" ] && grep -E '^(vless|trojan|vmess|ss|hy2)://' "configs/${i}.${s}.txt"; done; done; for i in 27 29 30 31 34; do [ -f "configs/${i}.txt" ] && grep -E '^(vless|trojan|vmess|ss|hy2)://' "configs/${i}.txt"; done; for i in 28 32 33; do for s in 1 2; do [ -f "configs/${i}.${s}.txt" ] && grep -E '^(vless|trojan|vmess|ss|hy2)://' "configs/${i}.${s}.txt"; done; done ) 2>/dev/null | sort -u | wc -l)
-          echo "  \"totalUnique\": $total" >> configs/counts.json
+
+          total=$(find configs -maxdepth 1 -name '*.txt' -print0 \
+            | xargs -0 -r grep -hE '^(vless|trojan|vmess|ss|hy2)://' 2>/dev/null \
+            | sort -u \
+            | wc -l \
+            | tr -d ' ')
+
+          printf '  "totalUnique": %s\n' "$total" >> configs/counts.json
           echo '}' >> configs/counts.json
           echo "  totalUnique: $total servers (no duplicates)"
+
+          {
+            echo "# ALL VPN CONFIGS"
+            echo "# Generated at: $(date -u +%Y-%m-%dT%H:%M:%SZ)"
+            echo "# Total unique servers: $total"
+            echo
+            for f in $(find configs -maxdepth 1 -name '*.txt' | sort -V); do
+              echo "===== $(basename "$f") ====="
+              cat "$f"
+              echo
+            done
+          } > configs/all.log
+
+          echo "  configs/all.log: $(wc -l < configs/all.log | tr -d ' ') lines"
 
       - name: Commit and push if changed
         run: |
@@ -157,10 +242,11 @@ jobs:
           git config user.email "github-actions[bot]@users.noreply.github.com"
           git add configs/
           git add -u
+
           if git diff --staged --quiet; then
             echo "No changes"
           else
             git status --short
-            git commit -m "chore: update VPN configs ($(date -u +%Y-%m-%dT%H:%MZ))"
+            git commit -m "chore: update VPN configs and all.log ($(date -u +%Y-%m-%dT%H:%MZ))"
             git push
           fi
