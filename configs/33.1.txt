@@ -1,3 +1,0 @@
-# Подписка 33.1 | CIDR VK/Ya/CDN/Beeline (igareck, короткий)
-trojan://zqUo21QF_53vpwrzmZ_xZxFkTF2-aQF9@185.86.147.171:2223?security=tls&sni=vkc9.secured-by-tenzo.sbs&alpn=http%2F1.1&fp=edge#%F0%9F%87%AA%F0%9F%87%B8%20Spain%20%5B%2ACIDR%5D%20VK
-trojan://zqUo21QF_53vpwrzmZ_xZxFkTF2-aQF9@gw1.secured-by-tenzo.sbs:2223/?type=tcp&security=tls&sni=vkc9.secured-by-tenzo.sbs&alpn=http%2F1.1&fp=edge#%F0%9F%87%AA%F0%9F%87%B8%20Spain%20%5B%2ACIDR%5D%20VK
